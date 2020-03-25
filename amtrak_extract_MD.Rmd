@@ -1,0 +1,980 @@
+---
+title: "Amtrak Summary"
+output: 
+  html_document:
+    theme: cerulean
+    toc: true
+    number_sections: true
+    toc_depth: 2
+    toc_float: 
+      collapsed: true
+      smooth_scroll: false
+---
+***
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, 
+                      cache = TRUE, 
+                      results = "hide", 
+                      warning = FALSE)
+```
+
+# Methodology
+***
+## R Specific Packages Used
+***
+```{r echo=TRUE, warning = FALSE, message = FALSE}
+#package install and load~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+library(data.table)
+library(magrittr)
+library(dplyr)
+library(stringr)
+library(lubridate)
+library(kableExtra)
+library(knitr)
+library(ggplot2)
+library(forcats)
+library(visdat)
+```
+
+## Data Import 
+***
+```{r}
+#package install and load~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+#defining asset data columns~~~~~
+names_indx = c('assetspecid', 'assetnum', 'assetattrid', 
+               'classstructureid', 'displaysequence', 'alnvalue', 
+               'changedate', 'changeby',  'Data_Date')
+
+#loading asset data~~~~~
+asset = fread("./data/ASSETSPEC 2020-03-16.csv") %>% 
+  set_colnames(names_indx) 
+
+#munging asset data~~~~~
+index = grepl("SEDTRACKSEGMENT", asset$assetattrid) | 
+  grepl("SED_CULVERTSPAN_", asset$assetattrid) |
+  grepl("AMTMAX", asset$assetattrid) |
+  grepl("JCH", asset$assetattrid) == TRUE
+
+asset_records_removed = asset[index,]  
+
+asset_records_removed %>% 
+  fwrite(file = "./output/data/asset_records_removed.csv")
+
+asset = asset[!index,]
+```
+
+The data used for this report was `ASSETSPEC 2020-03-16.csv`, it is referred to as ASSETSPEC in this document
+
+The number of records in ASSETSPEC is **`r nrow(asset)`**. 
+
+## Data Filtering
+***
+The loaded ASSETSPEC was filtered to exclude the following items : *SEDTRACKSEGMENT%*, *SED_CULVERTSPAN_%*, *AMTMAX%*, and *%JCH%*.  
+The first two items were removed because their assetattrids values did not match those in the source files.   
+In particular, they include the name of the parent source file in each assetattrid making it very difficult to properly join with the source files.   
+
+In total, **`r nrow(asset_records_removed)`** were removed from ASSETSPEC during the filtering.  
+A plot of the removed records per filtered item can be seen below.  
+
+```{r results='asis', fig.height=4, fig.width=6, fig.align='left'}
+asset_records_removed[str_detect(assetattrid, "SEDTRACKSEGMENT")]$assetattrid = "SEDTRACKSEGMENT" 
+asset_records_removed[str_detect(assetattrid, "SED_CULVERTSPAN")]$assetattrid = "SED_CULVERTSPAN" 
+asset_records_removed[str_detect(assetattrid, "AMTMAX")]$assetattrid = "AMTMAX" 
+asset_records_removed[str_detect(assetattrid, "JCH")]$assetattrid = "JCH" 
+
+asset_records_removed %>%  
+  .[,.(.N), by = .(assetattrid)] %>% 
+  .[,`:=`(assetattrid = fct_reorder(assetattrid, N, max))] %>% 
+  ggplot() + 
+  geom_col(aes(assetattrid, N), fill = "light blue") + 
+  geom_label(aes(assetattrid, N, label = N)) +
+  ylim(c(0,1280000)) +
+  coord_flip() +
+  labs(x = "", y = "Count", title = "Number of records removed by filtered assetattrid") +
+  theme_classic()  
+```
+   
+A small selection of these records can be seen below as an example.    
+These items were written out as a csv file titled *asset_records_removed.csv*.    
+    
+```{r results='asis'}
+asset_records_removed %>% 
+  sample_n(100) %>%  
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11) %>%
+  scroll_box(height = "200px")
+```
+
+```{r}
+#loading source file information data~~~~~
+master_id = fread("./data/master_id.csv")
+master_id_lookup = fread("./data/master_id_lookup.csv") %>%  
+  .[,`:=`(full_src = paste0("./data/", src, ".csv"))]
+  
+
+#removing unnneded source file directories
+index = grepl("GEO", master_id_lookup$src) | grepl("Speed", master_id_lookup$src) == TRUE
+master_id_lookup = master_id_lookup[!index,]
+
+#merging both files and changing attribute data type
+all_source_file_ids = master_id %>%
+  merge(master_id_lookup) %>% 
+  .[,c(2:3)] %>%  
+  unique()
+
+all_source_file_ids$ID = all_source_file_ids$ID %>%  as.integer()
+```
+
+```{r}
+#ASSETSPEC side EDA and munging~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+#ASSETSPEC record with SED_ID~~~~~
+#NA/NULLs cleaned
+lookup_asset_num_id = asset[assetattrid == "SED_ID",c(1,2,3,6)] %>% 
+  .[order(alnvalue)]
+
+lookup_asset_num_id$alnvalue = lookup_asset_num_id$alnvalue %>%  
+  as.integer()
+
+#Record with duplcicated SED_IDs
+lookup_asset_num_id_duplicated = lookup_asset_num_id[duplicated(lookup_asset_num_id)] 
+  unique
+
+#Non_Empty SED_IDs from Asset
+lookup_asset_num_id_nonempty = lookup_asset_num_id[!is.na(alnvalue),] %>% unique()
+
+#Empty SED_IDs from Asset
+lookup_asset_num_id_NA = lookup_asset_num_id[is.na(alnvalue),] %>% unique()
+# lookup_asset_num_id_NA = lookup_asset_num_id[alnvalue == "NULL",] %>% unique()
+
+#full asset table given Empty SED_IDs from Asset
+#USED AS REFERNCE CAN BE EXPORTED IF NEEDED
+asset_num_id_NA = semi_join(asset, lookup_asset_num_id_NA, by = c("assetnum")) %>% 
+  arrange(-desc(assetnum), assetattrid)
+```
+
+## Extracting IDs from ASSETSPEC
+***
+The total number of records where assetattrid == SED_ID was **`r nrow(lookup_asset_num_id)`**.  
+The total number of these records which have NA alnvalues was  **`r nrow(lookup_asset_num_id_NA)`**.   
+These were removed from the rest of the analysis.   
+In total, **`r nrow(lookup_asset_num_id_nonempty)`** unique SED_ID records were in the ASSETSPEC data.      
+
+```{r}
+#section~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#merges all relevant source SED extract IDs with nonempty asset IDS
+raw_merge = all_source_file_ids %>% 
+  merge(., 
+        lookup_asset_num_id_nonempty, 
+        by.x = "ID", 
+        by.y = "alnvalue", 
+        all = TRUE) %>% 
+  data.table() %>% 
+  unique()
+```
+
+```{r}
+#full merge check and identification of NA records
+merge_check_NA = raw_merge[!complete.cases(raw_merge)] #all rows w/ NA
+merge_check_NA_num_total = merge_check_NA %>%  nrow()
+
+# merge_check_NA %>%  
+  # visdat::vis_dat(sort_type =  FALSE)
+
+merge_check_NA_src = merge_check_NA[is.na(src)] #records w/ asset data but no s.file date
+merge_check_NA_src_num = merge_check_NA_src %>%  nrow()
+
+merge_check_NA_assetnum = merge_check_NA[is.na(assetnum)] #records w/ s.file date but no asset data
+merge_check_NA_assetnum_num = merge_check_NA_assetnum %>%  nrow()
+
+# raw_merge %>%  
+  # visdat::vis_dat(sort_type =  FALSE)
+```
+
+
+```{r}
+#matched IDs b/w SEDEXTARCT and ASSETSPEC 
+#complete cases
+master_matched_ids = raw_merge %>%  
+  na.omit() %>%  
+  unique()
+
+duplicated_id_list = master_matched_ids[duplicated(ID),1] %>%  
+  unique()
+
+duplicated_record_list = master_matched_ids[duplicated(master_matched_ids),]
+
+master_matched_ids_duplicate_rm = anti_join(master_matched_ids,
+                                            duplicated_id_list,
+                                            by = "ID") %>%
+  data.table() %>%
+  .[order(ID), c(1:4)]
+
+#THIS IS IMPORTANT SHOULD THEY BE REMOVED??? THEY ARE CURRENTLY NOT
+master_matched_ids_duplicate_only = semi_join(master_matched_ids,
+                                              duplicated_id_list,
+                                              by = "ID") %>%
+  data.table() %>%
+  .[order(ID),] 
+
+
+```
+
+These records were matched against a lookup table which contained all source file names and the IDs of their records.   
+This was done to match each unique *SED_ID* in ASSETSPEC to it's respective source file.     
+In total, there were **`r nrow(master_matched_ids)`** matches.    
+
+```{r}
+#section~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#DT below has all records ASSETNUMS where their SED_ID values were found
+asset_merged = lookup_asset_num_id_nonempty %>%  
+  semi_join(asset[,c(1,2,3,6)], ., by = c("assetnum")) %>% 
+  merge(., master_matched_ids[,c(-3,-5)], by = c("assetnum")) %>% 
+  data.table() %>% 
+  unique()
+
+asset_merged$ID = as.integer(asset_merged$ID)
+
+#full merge check and identification of NA records
+merge_check_NA = asset_merged[!complete.cases(asset_merged)] #all rows w/ NA
+merge_check_NA_num_total = merge_check_NA %>%  nrow()
+# merge_check_NA %>%  
+  # visdat::vis_dat()
+
+
+```
+
+All records with matching assetnum values corresponding to the *SED_ID* records were extracted from ASSETSPEC. In total, there were **`r nrow(asset_merged)`** records extracted from ASSETSPEC. These records would be then matched against the corresponding source files attribute values.
+
+```{r}
+#removing SED_TUNNEL, has bad headers
+index = grepl("Tunnel", asset_merged$src)
+asset_merged = asset_merged[!index,]
+
+index = grepl("ALTVER", asset_merged$src)
+asset_merged = asset_merged[!index,]
+
+#Extracting all matched ASSETxSEDEXTRACT records' columns and values
+suppressMessages({ 
+  suppressWarnings({
+    
+    retreived_source_id_info = data.table()
+    
+    print("Extracting data from the following source files:")
+    for (i in unique(asset_merged$src)){
+      
+      print(i)
+
+      tmp = asset_merged %>% 
+        .[src == i,ID] %>%  
+        unique()
+
+      retreived_source_id_info = master_id_lookup[src == i,full_src] %>%
+        fread(., colClasses = 'character') %>% 
+        .[ID %in% tmp,] %>% 
+        .[,`:=`(id = ID)] %>%  
+        purrr::map_df(as.character) %>% 
+        reshape2::melt(id.vars = c("ID"), 
+                       variable.factor = FALSE, 
+                       warning = FALSE) %>% 
+        data.table() %>% 
+        .[,`:=`(assetattrid = paste0("SED_", str_to_upper(variable)))] %>%  
+        bind_rows(retreived_source_id_info, .)
+    }
+    print("Done")
+  })
+})
+
+retreived_source_id_info$ID = retreived_source_id_info$ID %>%  
+  as.integer()
+
+```
+
+
+```{r results='asis', fig.height=4, fig.width=6, fig.align='left'}
+#full merge check and identification of NA records
+merge_check_NA = retreived_source_id_info[!complete.cases(retreived_source_id_info)] #all rows w/ NA
+merge_check_NA_num_total = merge_check_NA %>%  nrow()
+
+# merge_check_NA %>%  
+  # visdat::vis_dat(sort_type =  FALSE)
+
+```
+
+
+```{r}
+# retreived_source_id_info[value == ""]$value = "NULL"
+```
+
+## Source File Attributes
+***
+All matched SED_IDs' attribute data were then extracted from the source files.   
+In total, this extraction resulted in **`r nrow(retreived_source_id_info)`** records.   
+Each record in this table represents an attribute for a particular matched *SED_ID* value.   
+This table was then joined with all the extracted records from ASSETSPEC on the record's *SED_ID* and *assetattrid*. 
+
+# Initial ASSETSEPC & Extract Merge
+***
+```{r}
+#section~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#investigating mismatched occurance
+colum_order_index = c("src", "assetnum", "ID", "assetspecid", 
+                      "assetattrid", "variable", "alnvalue", "value")
+
+attribute_value_master = merge(asset_merged, 
+                               retreived_source_id_info, 
+                               by.x = c("ID", "assetattrid"), 
+                               by.y = c("ID", "assetattrid"), all = TRUE) %>%  
+  unique() %>% 
+  .[,..colum_order_index] %>%
+  .[order(src, ID, assetnum, assetattrid,)] %>% 
+  .[,-1] %>%  
+  merge(., all_source_file_ids, by = "ID" ) %>% 
+  .[,..colum_order_index] %>%  
+  .[order(src, ID, assetnum, assetattrid,)]
+
+index = grepl("JCH", attribute_value_master$assetattrid) 
+attribute_value_master = attribute_value_master[!index]
+
+attribute_value_master_rows = attribute_value_master %>%  nrow()
+```
+
+## Summary
+***
+The raw merge of these two tables resulted in **`r nrow(attribute_value_master)`** records. 
+The table's columns are:   
+
+* src -> the source file associated with the SED_ID
+* assetnum -> the assetnum associated with 
+* ID -> the SED_ID for that record
+* assetattrid -> the attribute name from the ASSETSPEC table
+* variable -> the attribute name from the source files
+* alnvalue -> the value associated with the attribute from the ASSETSPEC table
+* value -> the value associated with the attribute from the source files
+
+## Missing (NA) Data from Merge
+***
+```{r}
+merge_check_NA = attribute_value_master[!complete.cases(attribute_value_master)] #all rows w/ NA
+merge_check_NA_num_total = merge_check_NA %>%  nrow()
+
+na_count = is.na(merge_check_NA) %>%  
+  data.table() %>% 
+  .[,.(.N), by = .(src, ID, assetnum, assetspecid, assetattrid, alnvalue, variable, value)] %>% 
+  .[,-c('src', 'ID', 'assetattrid')] 
+
+```
+
+A large number of records from the data merge were populated with NAs.
+Number NA records: **`r  nrow(merge_check_NA)`**.    
+That is roughly **`r  100*round(nrow(merge_check_NA)/nrow(attribute_value_master), 3)`** percent of the resulting data mereger.  
+NAs occure when data is missing.   
+It is important to track the number of missing values and the patterns they occur in as it indicates points where either source cannot map to the other.   
+Examples of potential causes include:
+     
+* Outright data transfer failure - eg. source 1 contains data source 2 does not, or visa versa
+* Data compeltely mismatched - eg. attribute names are different between data sets   
+
+As an aside, NAs are different than a *NULL* values.   
+The latter is not considered missing data as it is a litteral data value that can be referenced with.  
+     
+The plot below depicts the total number of incomplete/NA records and the prevailing patterns in which the NAs occured. 
+
+```{r results='asis', fig.height=4, fig.width=6, fig.align='left'}
+#full merge check and identification of NA record
+missing_data_viz = merge_check_NA %>%  
+  .[,.(src, ID, assetnum, assetspecid, assetattrid, alnvalue, variable, value)] %>%  
+  .[order(assetnum)] %>% 
+  vis_dat(warn_large_data = FALSE, 
+          sort_type = FALSE)
+
+missing_data_viz
+```
+
+The table below details the NA type pattern, the number of occurances, and an emblematic example of record with said NA type (record examples start at column **assetnum** to **value**.    
+       
+* **Row 1**:    
+  + Instances where ASSETSPEC data were missing while source file data were present. 
+  + Potential Cause: Not all data was tranferred to ASSETSPEC
+* **Row 2**:
+  + Instances where ASSETSPEC data were present while source file data were missing 
+  + Potential Cause: assetattrids don' map between data sets 
+    - ASSETSPEC assetattrid changed in transfer 
+    - Source file attribute names were doubled up
+* **Row 3**:
+  + Data set attributes map between data sets, both values don't exist 
+    - Could be considered a positive match between values
+* **Row 4**:
+  + Source file value is missing while corresponding value is present 
+  + Very strange but very low count
+
+```{r results='asis'}
+
+ffmerge_na_no_asset_data =  merge_check_NA[is.na(assetnum) &
+                 is.na(assetspecid) &
+                 is.na(alnvalue) &
+                 !is.na(variable) &
+                 !is.na(value),]
+                 
+ffmerge_na_no_alnvalue_value = merge_check_NA[!is.na(assetnum) &
+                 !is.na(assetspecid) &
+                 is.na(alnvalue) &
+                 !is.na(variable) &
+                 is.na(value),]
+
+ffmerge_na_no_extract_data = merge_check_NA[!is.na(assetnum) &
+                 !is.na(assetspecid) &
+                 !is.na(alnvalue) &
+                 is.na(variable) &
+                 is.na(value),]
+
+ffmerge_na_no_value = merge_check_NA[!is.na(assetnum) &
+                 !is.na(assetspecid) &
+                 !is.na(alnvalue) &
+                 !is.na(variable) &
+                 is.na(value),]
+
+ffmerge_summary_table = bind_cols(data.table(na_type = c('no_asset_data', 
+                                 'no_extract_data', 
+                                 'no_alnvalue_value',
+                                 'no_value'), 
+                     na_count = na_count$N),
+          bind_rows(ffmerge_na_no_asset_data[1,], 
+                    ffmerge_na_no_extract_data[1,],
+                    ffmerge_na_no_alnvalue_value[1,],
+                    ffmerge_na_no_value[1,]) %>%  
+            .[,.(src, ID, assetnum, assetspecid, assetattrid, alnvalue, variable, value)]) 
+
+ffmerge_summary_table %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11) %>%
+  scroll_box(height = "200px", width = "100%") 
+```
+
+```{r}
+#I dont want to do this, we want to keep NULLS that are native there and get rid of NAs after cataloging them
+
+#fixes NULLs, NAs, Empties
+# attribute_value_master[is.na(variable)]$variable = "NULL"
+# attribute_value_master[variable == ""]$variable = "NULL"
+# attribute_value_master[is.na(value)]$value = "NULL"
+# attribute_value_master[value == ""]$value = "NULL"
+# attribute_value_master[is.na(alnvalue)]$alnvalue = "NULL"
+# attribute_value_master[assetnum == ""]$assetnum = "NULL"
+# attribute_value_master[is.na(assetnum)]$assetnum = "NULL"
+# attribute_value_master[src == ""]$src = "NULL"
+# attribute_value_master[is.na(src)]$src = "NULL"
+# attribute_value_master[assetspecid == ""]$assetspecid = "NULL"
+# attribute_value_master[is.na(assetspecid)]$assetspecid = "NULL"
+# attribute_value_master[assetspecid == "NA"]$assetspecid = "NULL"
+# 
+# attribute_value_master_rows = nrow(attribute_value_master)
+```
+
+```{r results='asis'}
+#redundent 
+
+# no_sfile_attribute = attribute_value_master %>% .[variable  == "NULL", ] 
+# no_sfile_attribute_nrows = nrow(no_sfile_attribute)`
+# 
+# no_assetattrid_attribute = attribute_value_master %>% .[assetattrid  == "NULL", ] 
+# no_assetattrid_attribute_nrows = nrow(no_assetattrid_attribute)
+# 
+# no_attribute_transfer_src_failure = attribute_value_master %>% .[src  == "NULL", ] 
+# no_attribute_transfer_src_failure_rows = nrow(no_attribute_transfer_src_failure)
+```
+
+```{r}
+attribute_value_master = attribute_value_master %>%  
+  na.omit()
+
+attribute_value_master_good_row = attribute_value_master %>%  nrow()
+```
+
+These records were ultimately removed from the merged table, resulting in `r nrow(attribute_value_master_good_row)` non-NA records.   
+This table only contains compelete reocrds.  
+
+```{r}
+#matching columns but 
+attribute_value_notmatching =  attribute_value_master %>% 
+  .[alnvalue != value,] %>% 
+  .[,..colum_order_index] %>%  
+  .[order(src, ID, assetnum, assetattrid,)]
+
+attribute_value_matching = attribute_value_master %>% 
+  .[alnvalue == value,] %>% 
+  .[,..colum_order_index] %>%  
+  .[order(src, ID, assetnum, assetattrid,)]
+```
+
+After the removal of these records, there were **`r nrow(attribute_value_notmatching)`** failed matches and **`r nrow(attribute_value_matching)`** positive matches.  
+
+
+## False Mismatch Removal
+***
+After perfroming spot checks, it was found that there were a substantial number of false positive *alnvalue/value* mismatches.    
+These mismatches were caused by a number of things, ranging from simple CASE or white space padding issues to more critical character encoding errors.     
+In either instance, these mismatches were deemed to be falsely attributed to the record transfer and records where this occurred were removed from the mismatch record table.    
+
+Some examples of this will be listed below:   
+
+### Case and Whitespace
+***
+```{r results='asis'}
+#removes all mismatch cases caused by CASE or whitespace issues
+index_character_mismatch = str_trim(str_to_lower(attribute_value_notmatching$alnvalue), side = "both") == str_trim(str_to_lower(attribute_value_notmatching$value),side = "both")
+tmp = attribute_value_notmatching[!index_character_mismatch]
+attribute_value_notmatching[index_character_mismatch] %>% 
+  fwrite(file = "./output/data/total_matched_example_case_whitespace_sensitive.csv")
+
+attribute_value_notmatching[index_character_mismatch] %>% 
+  sample_n(5) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11) %>%
+  scroll_box(height = "200px") 
+```
+
+### Numeric Padding
+***
+```{r results='asis'}
+#removes all records where mismatch was caused by false padding encoding
+index_alnvalue = as.numeric(tmp$alnvalue)
+index_alnvalue[is.na(index_alnvalue)] = 0
+
+index_value = as.numeric(tmp$value)
+index_value[is.na(index_value)] = -29348576.127
+
+index_PADDING_mismatch = index_alnvalue == index_value
+
+tmp[index_PADDING_mismatch] %>% 
+  fwrite(file = "./output/data/total_matched_example_padding.csv")
+
+tmp[index_PADDING_mismatch] %>% 
+  sample_n(5) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11) %>%
+  scroll_box(height = "200px") 
+
+tmp = tmp[!index_PADDING_mismatch] 
+```
+
+### Rounding
+***
+```{r results='asis'}
+#removes long/lat columns as proven to be just a rounding error
+index = grepl("LONG", tmp$assetattrid) | grepl("LATITUDE", tmp$assetattrid)
+tmp[index] %>% 
+  fwrite(file = "./output/data/total_matched_example_rounding.csv")
+
+tmp[index] %>% 
+  sample_n(5) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11)
+
+tmp = tmp[!index]
+```
+
+### Special Characters
+***
+```{r results='asis'}
+#removes all records where mismatch was caused by false encoding
+index_DIMENSIONS = tmp$assetattrid == "SED_DIMENSIONS"
+
+total_matched_bad = tmp[!index_DIMENSIONS] 
+
+tmp[index_DIMENSIONS]  %>% 
+  fwrite(file = "./output/data/total_matched_example_seddimensions.csv")
+
+tmp[index_DIMENSIONS] %>% 
+  sample_n(5) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11) %>%
+  scroll_box(height = "200px") 
+``` 
+
+### Date Format Mismatch 
+***
+```{r results='asis'}
+index_DATE_ENCODE_errors = total_matched_bad[assetattrid == 'SED_DATEVERIFIED' | 
+                              assetattrid == 'SED_INSTALLDATE', ]$alnvalue %>% 
+  str_length() > 7
+
+total_matched_bad[assetattrid == 'SED_DATEVERIFIED' | 
+                    assetattrid == 'SED_INSTALLDATE', ][!index_DATE_ENCODE_errors] %>%
+  fwrite(file = "./output/data/total_matched_example_gooddates.csv")
+
+tmp_good_date = total_matched_bad[assetattrid == 'SED_DATEVERIFIED' | 
+                    assetattrid == 'SED_INSTALLDATE', ][index_DATE_ENCODE_errors]
+
+tmp_good_date %>% 
+  sample_n(5) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11) %>%
+  scroll_box(height = "200px") 
+```
+
+```{r}
+total_matched_bad = anti_join(total_matched_bad,
+                              tmp_good_date, 
+                              by = colum_order_index) %>%  
+  data.table()
+
+total_matched_good = attribute_value_master %>%  
+  anti_join(total_matched_bad, by = c('assetnum', 'assetspecid', "assetattrid")) %>%  
+  data.table()
+
+total_matched_bad %>%  
+  fwrite(file = "./output/data/total_matched_bad.csv")
+
+total_matched_good %>%  
+  fwrite(file = "./output/data/total_matched_good.csv")
+```
+
+```{r}
+#DELETE< INVESTIGATION ONLY
+total_matched_bad %>%  
+  .[ID == '506697' &	
+      assetspecid == '6452016',value] 
+
+attribute_value_master
+attribute_value_master[value == ""]
+```
+
+
+
+
+# Final ASSETSEPC & Extract Merge 
+***
+## Summary
+***
+**`r nrow(total_matched_good)`** records were properly matched on the *alnvalue* and *value* coulmns.        
+Examples of these records can are below:   
+    
+```{r results="asis"}
+total_matched_good %>% 
+  sample_n(500) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11) %>%
+  scroll_box( height = "200px")
+```
+   
+*CAUTION: Some values may appear to be non-matching, this is likely due to an encoding error produced by R. Most of these types of mismatches are accounted for and are addressed below.  
+
+The number of false matched records is **`r nrow(total_matched_bad)`**. Examples of these records can are below:   
+```{r results="asis"}
+total_matched_bad %>%
+  sample_n(500) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11) %>%
+  scroll_box(height = "200px") 
+```
+
+The match failure rate is roughly **`r 100*nrow(total_matched_bad)/(nrow(total_matched_bad)+ nrow(total_matched_good))`** percent.
+
+## Failed Match Diagnostics
+***
+
+### Total Records   
+The table below details:    
+      
+* The source file where the matched ID record came from
+* Total matches - where IDs and *assetattrids* metched between the source files and ASSETSPEC 
+* Number of postive matches - where the alnvalue and value matched or were deemed a 'match' by manual inspection
+* Failed matches
+* Failure rate in percent
+
+The table indicates where most of the failures originated from and where effort should be placed to buy down match errors.
+
+```{r results="asis"}
+summary_diagnostic = total_matched_bad %>%  
+  .[,.(fail = .N), by = .(src)] %>%  
+  merge(total_matched_good %>%  
+          .[,.(pass = .N), by = .(src)], on = "src") %>%  
+  .[,`:=`(total = fail + pass)] %>% 
+  .[,`:=`(fail_per = 100*round(fail/total,3))] %>%  
+  .[order(-fail)] 
+
+summary_diagnostic %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11) %>%
+  scroll_box( height = "200px") 
+```
+
+
+### Null values kept   
+***
+The two tree plots below give an indication to the scope and scale of mismatched values.       
+The top plot indicates mismatched records by source file and the bottom plot by *assetattid*.  
+They report all mismatches between *alnvalue* and *value* regadless if **NULL** isa present in either.  
+
+```{r results='asis', fig.height=4, fig.width=8, fig.align='left'}
+
+summary_diagnostic %>%  
+  .[,`:=`(src = str_remove(src, "SED_"))] %>%
+  treemap::treemap(., 
+                 index = "src", 
+                 vSize = "fail", 
+                 vColor = "fail_per",
+                 type = "value", 
+                 title = "Failed matches per originating source file")
+```
+
+```{r}
+summary_diagnostic = total_matched_bad %>%  
+  .[,.(fail = .N), by = .(assetattrid)] %>%  
+  merge(total_matched_good %>%  
+          .[,.(pass = .N), by = .(assetattrid)], on = "assetattrid") %>%  
+  .[,`:=`(total = fail + pass)] %>% 
+  .[,`:=`(fail_per = 100*round(fail/total,3))] %>%  
+  .[order(-fail)] %>%  
+  .[,`:=`(assetattrid = str_remove(assetattrid, "SED_"))]
+```
+
+```{r results='asis', fig.height=4, fig.width=8, fig.align='left'}
+treemap::treemap(summary_diagnostic, 
+                 index = "assetattrid", 
+                 vSize = "fail", 
+                 vColor = "fail_per",
+                 type = "value", 
+                 title = "Failed matches per assetattributeid")
+```
+
+### Null Values Removed 
+***
+The plots below display the same data as above but with all records containing **NULL** in either *alnvalue* or *value* removed.   
+These should be used in direct comparison with the plots above
+These are TRUE mismatch cases where there were reported values for each matched ID attribute in both datasets but were wrond for some reason.  
+      
+```{r results="asis"}
+#poor match metrics~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+total_matched_bad_non_null = total_matched_bad[alnvalue != "NULL" &  value != "NULL"]
+total_matched_bad_non_null %>%  
+  fwrite(file = "./output/data/total_matched_bad_non_null.csv")
+
+total_matched_bad_null_value = total_matched_bad[value == "NULL"]
+total_matched_bad_null_value %>%  
+  fwrite(file = "./output/data/total_matched_bad_null_value.csv")
+
+total_matched_bad_null_alnvalue = total_matched_bad[alnvalue == "NULL"] 
+total_matched_bad_null_alnvalue %>%  
+  fwrite(file = "./output/data/total_matched_bad_null_alnvalue.csv")
+```
+
+```{r results="asis"}
+summary_diagnostic = total_matched_bad_non_null %>%  
+  .[,.(fail = .N), by = .(src)] %>%  
+  .[,`:=`(src = str_remove(src, "SED_"))]
+  
+```
+
+```{r results='asis', fig.height=4, fig.width=8, fig.align='left'}
+treemap::treemap(summary_diagnostic, 
+                 index = "src", 
+                 vSize = "fail", 
+                 vColor = "fail",
+                 type = "value", 
+                 title = "Failed matches per originating source file, NULL reocrds removed")
+```
+
+```{r}
+summary_diagnostic = total_matched_bad %>%  
+  .[,.(fail = .N), by = .(assetattrid)] %>%  
+  .[,`:=`(assetattrid = str_remove(assetattrid, "SED_"))] 
+```
+
+```{r results='asis', fig.height=4, fig.width=8, fig.align='left'}
+treemap::treemap(summary_diagnostic, 
+                 index = "assetattrid", 
+                 vSize = "fail", 
+                 vColor = "fail",
+                 type = "value", 
+                 title = "Failed matches per assetattributeid, NULL reocrds removed")
+```
+  
+**`r nrow(total_matched_bad_non_null)`** mismatches occurred when neither alnvalue or value were NULL.   
+These cases are of the most concern as they are legitimate mismatch errors. 
+The records per source and assetattrid can be seen below:
+```{r results="asis"}
+total_matched_bad_non_null %>% 
+  .[,.(.N), by = .(src, assetattrid)] %>%  
+  .[order(-N)] %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11) %>%
+  scroll_box(height = "200px")  
+```
+**`r nrow(total_matched_bad_null_value)`** mismatches occurred when alnvalue was non-NULL and value was NULL.   
+The records per source and assetattrid can be seen below:  
+        
+```{r results="asis"}
+total_matched_bad_null_value %>% 
+  .[,.(.N), by = .(src, assetattrid)] %>%  
+  .[order(-N)] %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11) %>%
+  scroll_box(height = "200px") 
+```
+
+**`r nrow(total_matched_bad_null_alnvalue)`** mismatches occurred when alnvalue was NULL and value was non-NULL.   
+The records per source and assetattrid can be seen below:    
+   
+```{r results="asis"}
+total_matched_bad_null_alnvalue %>% 
+  .[,.(.N), by = .(src, assetattrid)] %>%  
+  .[order(-N)] %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11) %>%
+  scroll_box(height = "200px")  
+```
+
+## Match Error Investigation
+***
+
+### Missing attributes in ASSETSPEC
+***
+This is a big problem and needs to be fixed.
+   
+Fixes/comments:
+   
+* Consistent attribute naming in the source files
+* Flagging source file attribute names when we know they are going to be changed in ASSETSPEC
+* Some ability to make the mapping better between changed attributeids
+    
+```{r results = "asis"}
+# no_sfile_attribute %>%
+#   sample_n(5) %>% 
+#   kable() %>%
+#   kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11)
+```
+
+### Date Errors
+***
+```{r results = "asis"}
+####dates in the format, not UNIX what is it
+index = grepl("DATE", total_matched_bad$assetattrid)
+```
+
+As seen in the above plot, a bulk of the valid record mismatches are from the *DATE* attributes.
+
+There are **`r nrow(total_matched_bad[index, c(1,5,7,8)] )`** records where a *DATE* related attribute caused a mismatched record. 
+  
+Fixes/comments:
+  
+* Mismatch error caused by the ASSETSPEC alnvalues being formatted as a #### numeric
+* this is not UNIX or some common time format
+* They need to be reformatted to %d/%m/%Y format
+   
+```{r results = "asis"}
+total_matched_bad[index, c(1,5,7,8)] %>% 
+  unique() %>% 
+  sample_n(5) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11)
+```
+
+
+### Special character formatting
+***
+The SED_Dimensions assetattidid used unconventional formatting for dimensions. 
+   
+Fixes/comments:   
+      
+* Uses single and double quotes to indicate feet or inches presumably
+* This is bad practice ideally be parsed into separate length and width components.
+* Reported units are also inconsistent, and should be either all in feet or inches.
+    
+```{r results = "asis"}
+attribute_value_notmatching[assetattrid == "SED_DIMENSIONS"] %>% 
+  sample_n(5) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11) 
+
+yolo1 = nrow(total_matched_bad[value == ""])
+yolo2 = nrow(total_matched_bad[alnvalue == ""])
+```
+
+### Empty Values
+***
+Empty character values are being recorded only for the source file data values.  
+After the source file and ASSETSPEC merge and removal of incomplete/NA records, there were:   
+      
+* **`r yolo1`** records where this occurs in the source file data
+* **`r yolo2`** records where this occurs in the ASSETSPEC data
+
+This match error is substantial as it accoutns for roughly **`r 100*round(yolo1/nrow(total_matched_bad),3)`** percent of the **`r nrow(total_matched_bad)`** total bad matches.
+   
+Fixes/comments:   
+      
+* Attributes properly map between data sets
+* Spot checks reveal that attribute exists in source files but with an empty cell
+* Empty cell in ASSETSPEC are reflected as NULL, in theory no-mismatch occuring
+  + Can ignore these 
+  + Or force empty cells to be NULL in source files
+
+Table detailing orginating source files and correspoinging alnvalue:
+```{r results = "asis"}
+total_matched_bad[value == ""] %>% 
+  .[,.(.N), by = .(src, alnvalue)] %>% 
+  .[order(-N)] %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11) %>%
+  scroll_box(height = "200px")
+```
+
+Example of records:
+```{r results = "asis"}
+attribute_value_master[value == ""] %>%   
+  sample_n(5) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11)  
+```
+
+# Richter Summary 
+***
+1) **From the total number of ASSETSPEC records, how many ASSETSPEC records are excluded and why?**        
+The loaded ASSETSPEC was filtered to exclude the following items:    
+*SEDTRACKSEGMENT%*, *SED_CULVERTSPAN_%*, *AMTMAX%*, and *%JCH%*.        
+**`r nrow(asset)-nrow(asset_records_removed)`** OK, **`r nrow(asset_records_removed)`** NOT, (=Total **`r nrow(asset)`**)  
+
+2) **Out of the total number of SED_ID values in ASSETSPEC, how many match the extract data?**    
+Number of records where assetattrid == SED_ID is **`r nrow(lookup_asset_num_id_nonempty)`**.   
+The total number of these records which have NULL alnvalues was  **`r nrow(lookup_asset_num_id_NA)`**.    
+These were removed from the rest of the analysis.    
+In total, there were **`r nrow(master_matched_ids)`** matches where assetattrid == SED_ID.   
+
+3) **For every datapoint in the extract dataset that belongs to SED_IDs that are matched, how many of these have matching entries in the assetspec dataset (col name = assetattrid)?**    
+Complete Records: **`r attribute_value_master_good_row`**.     
+Incomplete Records: **`r sum(ffmerge_summary_table$na_count)`**.  
+
+* IR.1: **`r ffmerge_summary_table$na_count[1]`** -> no assetattrid value (ASSETSPEC side)     
+* IR.2: **`r ffmerge_summary_table$na_count[2]`** -> no variable value (source file side)    
+* IR.3: **`r ffmerge_summary_table$na_count[3]`** -> missing ASSETSPEC and sourve file data (attributes map)  
+* IR.4: **`r ffmerge_summary_table$na_count[4]`** -> missing sourve file data (attributes map) 
+Total Matches: **`r attribute_value_master_rows`** 
+
+4) **For every matched entry, does the alnvalue = the sed value? How many match and how many do not match?**    
+Good Matches: **`r nrow(total_matched_good)`**    
+Bad Matches: **`r nrow(total_matched_bad)`**    
+Total Matches: **`r nrow(total_matched_bad) + nrow(total_matched_good)`**      
+Percent Failure: **`r 100*nrow(total_matched_bad)/(nrow(total_matched_bad)+ nrow(total_matched_good))`** percent.     
+See following files for more detail:    
+total_matched_good -> all good matches  
+total_matched_bad -> all bad matches  
+total_matched_bad_non_null.csv -> slice of bad matches, where neither data set values are null  
+total_matched_bad_null_value.csv -> slice of bad matches, where source file values are null  
+total_matched_bad_null_alnvalue.csv -> slice of bad matches, where ASSETSPEC values are null  
+total_matched_bad_null_only.csv - poor match instances where source could not be found, possibly due to multiple IDs 
+
+
+
+
+
+
+
+
+
