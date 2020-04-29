@@ -1,0 +1,1465 @@
+---
+title: "Amtrak Data Merger Validation"
+
+output:
+  html_document:
+    theme: cerulean
+    toc: true
+    number_sections: false
+    toc_depth: 4
+    toc_float: 
+      collapsed: true
+      smooth_scroll: false
+---
+![](./www/logo.jpg)
+***
+***
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, 
+                      cache = FALSE, 
+                      results = "hide", 
+                      warning = FALSE)
+```
+
+
+```{r echo=FALSE, warning = FALSE, message = FALSE, cache=FALSE}
+#package install and load~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+library(data.table)
+library(magrittr)
+library(dplyr)
+library(stringr)
+library(lubridate)
+library(kableExtra)
+library(formattable)
+library(knitr)
+library(ggplot2)
+library(forcats)
+library(visdat)
+library(ggpubr)
+library(treemapify)
+```
+
+```{r}
+#package install and load~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+#defining asset data columns~~~~~
+names_indx = c('assetspecid', 'assetnum', 'assetattrid', 
+               'classstructureid', 'displaysequence', 'alnvalue', 
+               'changedate', 'changeby',  'Data_Date')
+
+#loading asset data~~~~~
+asset = fread("./data/ASSETSPEC 2020-04-21.csv") #%>% 
+  .[,..names_index]
+  set_colnames(names_indx) 
+
+#munging asset data~~~~~
+index = grepl("SEDTRACKSEGMENT", asset$assetattrid) | 
+  grepl("SED_CULVERTSPAN_", asset$assetattrid) |
+  grepl("AMTMAX", asset$assetattrid) |
+  grepl("JCH", asset$assetattrid) == TRUE
+
+asset_records_removed = asset[index,]  
+
+asset_records_removed %>% 
+  fwrite(file = "./output/data/asset_records_removed.csv")
+
+asset = asset[!index,]
+```
+
+```{r  , fig.height=4, fig.width=6, fig.align='left'}
+asset_records_removed[str_detect(assetattrid, "SEDTRACKSEGMENT")]$assetattrid = "SEDTRACKSEGMENT" 
+asset_records_removed[str_detect(assetattrid, "SED_CULVERTSPAN")]$assetattrid = "SED_CULVERTSPAN" 
+asset_records_removed[str_detect(assetattrid, "AMTMAX")]$assetattrid = "AMTMAX" 
+asset_records_removed[str_detect(assetattrid, "JCH")]$assetattrid = "JCH" 
+```
+
+
+```{r}
+#package install and load~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+#defining asset data columns~~~~~
+names_indx = c('assetspecid', 'assetnum', 'assetattrid', 
+               'classstructureid', 'displaysequence', 'alnvalue', 
+               'changedate', 'changeby',  'Data_Date')
+
+#loading asset data~~~~~
+asset0421 = fread("./data/ASSETSPEC 2020-04-21.csv") 
+
+asset0421
+
+#munging asset data~~~~~
+index = grepl("SEDTRACKSEGMENT", asset0416$assetattrid) | 
+  grepl("SED_CULVERTSPAN_", asset0416$assetattrid) |
+  grepl("AMTMAX", asset0416$assetattrid) |
+  grepl("JCH", asset0416$assetattrid) == TRUE
+
+asset_records_removed2 = asset0416[index,]  
+
+asset_records_removed %>% 
+  fwrite(file = "./output/data/asset_records_removed.csv")
+
+asset = asset[!index,]
+```
+
+```{r  , fig.height=4, fig.width=6, fig.align='left'}
+asset_records_removed[str_detect(assetattrid, "SEDTRACKSEGMENT")]$assetattrid = "SEDTRACKSEGMENT" 
+asset_records_removed[str_detect(assetattrid, "SED_CULVERTSPAN")]$assetattrid = "SED_CULVERTSPAN" 
+asset_records_removed[str_detect(assetattrid, "AMTMAX")]$assetattrid = "AMTMAX" 
+asset_records_removed[str_detect(assetattrid, "JCH")]$assetattrid = "JCH" 
+```
+
+  
+```{r}
+#loading source file information data~~~~~
+master_id = fread("./data/master_id.csv")
+master_id_lookup = fread("./data/master_lookup.csv") %>%  
+  .[,`:=`(full_src = paste0("./data/", src, ".csv"))]
+  
+
+#removing unnneded source file directories
+index = grepl("GEO", master_id_lookup$src) | 
+  grepl("META", master_id_lookup$src) | 
+  grepl("Speed", master_id_lookup$src) | 
+  grepl("Route", master_id_lookup$src) | 
+  grepl("Frogs", master_id_lookup$src) | 
+  grepl("FROGVERALTVER]", master_id_lookup$src) == TRUE
+
+master_id_lookup = master_id_lookup[!index,]
+
+#merging both files and changing attribute data type
+all_source_file_ids = master_id %>%
+  merge(master_id_lookup) %>% 
+  .[,c(2:3)] %>%  
+  unique()
+
+all_source_file_ids$ID = all_source_file_ids$ID %>%  as.integer()
+```
+
+```{r}
+#ASSETSPEC side EDA and munging~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+#assetattrid == SED_ID~~~~~
+lookup_asset_num_id = asset[assetattrid == "SED_ID",c(1,2,3,6)] %>% 
+  .[order(alnvalue)]
+
+lookup_asset_num_id %>%  
+  fwrite(file = "./output/data/lookup_asset_num_id.csv")
+
+first_num = lookup_asset_num_id %>%  nrow()
+
+lookup_asset_num_id$alnvalue = lookup_asset_num_id$alnvalue %>%  
+  as.integer()
+
+#writing out incomplete records
+tmp = lookup_asset_num_id[!complete.cases(lookup_asset_num_id)]
+bad_num = tmp %>%  nrow()
+
+#complete cases only
+lookup_asset_num_id = lookup_asset_num_id[complete.cases(lookup_asset_num_id)]
+
+
+```
+
+```{r}
+#aggregating duplicated records per field
+get_unique = function(list){
+  list %>%  
+    unique() %>%  
+    length()
+}
+
+#summary dupe per column
+tmp_check = data.table(complete_records = lookup_asset_num_id %>%  nrow(), 
+           lookup_asset_num_id %>%  
+             purrr::map_df(., get_unique)) %>%  
+  melt.data.table(variable.name = "Number of Records per Item", 
+                  value.name = "Count") %>%  
+  .[,`:=`(non_Distinct_Count = nrow(lookup_asset_num_id)-Count)] %>%  
+  .[-4,]
+```
+
+```{r}
+#dupe extract
+index_dupe_ids = unique(lookup_asset_num_id[duplicated(alnvalue)]$alnvalue)
+
+#get asset_compelete dupe ids
+lookup_asset_num_id_duplicated = lookup_asset_num_id[which(alnvalue %in% index_dupe_ids),]
+```
+
+```{r}
+#gets source ID dupes 
+sfiles_duplicated_ids = all_source_file_ids[which(ID %in% unique(all_source_file_ids[duplicated(ID)]$ID)),] %>%  
+  .[order(ID)]
+
+```
+
+```{r  }
+#sorts all source files by dupe ids
+different_source_duplicates = all_source_file_ids[which(ID %in% index_dupe_ids)] %>% 
+  .[order(ID)]
+```
+
+```{r}
+#checks to see if there dupes from different source files
+different_source_duplicates = setDT(different_source_duplicates)[, if(.N > 1) .SD, by = ID]
+```
+
+```{r}
+#section~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#merges all relevant source SED extract IDs with nonempty asset IDS
+raw_merge = all_source_file_ids %>% 
+  merge(., 
+        lookup_asset_num_id, 
+        by.x = "ID", 
+        by.y = "alnvalue", 
+        all = TRUE) %>% 
+  data.table() %>% 
+  unique()
+
+duplicate_id_check = raw_merge %>%  
+  semi_join(different_source_duplicates[,1], by = 'ID') %>%  
+  data.table() %>% 
+  .[order(ID, assetnum)]
+```
+
+```{r}
+#full merge check and identification of NA records
+merge_check_NA = raw_merge[!complete.cases(raw_merge)] #all rows w/ NA
+merge_check_NA_num_total = merge_check_NA %>%  nrow()
+
+# merge_check_NA %>%  
+  # visdat::vis_dat(sort_type =  FALSE)
+
+merge_check_NA_src = merge_check_NA[is.na(src)] #records w/ asset data but no s.file date
+merge_check_NA_src_num = merge_check_NA_src %>%  nrow()
+
+merge_check_NA_assetnum = merge_check_NA[is.na(assetnum)] #records w/ s.file date but no asset data
+merge_check_NA_assetnum_num = merge_check_NA_assetnum %>%  nrow()
+
+```
+
+```{r}
+#matched IDs b/w SEDEXTARCT and ASSETSPEC 
+#complete cases
+master_matched_ids = raw_merge %>%  
+  na.omit() %>%  
+  unique()
+
+duplicated_id_list = master_matched_ids[duplicated(ID),1] %>%  
+  unique()
+
+duplicated_record_list = master_matched_ids[duplicated(master_matched_ids),]
+
+master_matched_ids_duplicate_rm = anti_join(master_matched_ids,
+                                            duplicated_id_list,
+                                            by = "ID") %>%
+  data.table() %>%
+  .[order(ID), c(1:4)]
+
+#THIS IS IMPORTANT SHOULD THEY BE REMOVED??? THEY ARE CURRENTLY NOT
+master_matched_ids_duplicate_only = semi_join(master_matched_ids,
+                                              duplicated_id_list,
+                                              by = "ID") %>%
+  data.table() %>%
+  .[order(ID),] 
+```
+
+```{r}
+#section~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#DT below has all records ASSETNUMS where their SED_ID values were found
+asset_merged = lookup_asset_num_id %>%  
+  semi_join(asset[,c(1,2,3,6)], ., by = c("assetnum")) %>% 
+  merge(., master_matched_ids[,c(-3,-5)], by = c("assetnum")) %>% 
+  data.table() %>% 
+  unique()
+
+asset_merged$ID = as.integer(asset_merged$ID)
+
+#full merge check and identification of NA records
+merge_check_NA = asset_merged[!complete.cases(asset_merged)] #all rows w/ NA
+merge_check_NA_num_total = merge_check_NA %>%  nrow()
+
+```
+
+```{r}
+# COMMENT OUT WHEN DONE 
+# PERFORMS CHECK ON DUPLICATED COLNAMES IN ASSETSPEC 
+tmp = asset_merged %>%  
+ .[str_detect(assetattrid, "2")] %>%  
+  .[,.(assetattrid, src)] %>% 
+  unique() 
+
+tmp$assetattrid = str_remove_all(tmp$assetattrid, pattern = "2") %>% 
+    gsub('^\\.|\\_$', '', .) %>%  
+    gsub('^\\.|\\-$', '', .)
+
+yolo = asset_merged[grepl(paste0(tmp$assetattrid, collapse = "|"), assetattrid)] %>%  
+  .[,.(src, assetattrid)] %>% 
+  unique()
+
+duplicated_colname_extract_side = yolo[which(src %in% tmp$src)] %>%  
+  .[order(src, assetattrid)] 
+
+```
+
+```{r}
+#removing SED_TUNNEL, has bad headers
+# index = grepl("Tunnel", asset_merged$src)
+# asset_merged = asset_merged[!index,]
+
+index = grepl("ALTVER", asset_merged$src)
+asset_merged = asset_merged[!index,]
+
+#Extracting all matched ASSETxSEDEXTRACT records' columns and values
+suppressMessages({ 
+  suppressWarnings({
+    
+    retreived_source_id_info = data.table()
+    
+    print("Extracting data from the following source files:")
+    for (i in unique(asset_merged$src)){
+      
+      print(i)
+
+      tmp = asset_merged %>% 
+        .[src == i,ID] %>%  
+        unique()
+
+      retreived_source_id_info = master_id_lookup[src == i,full_src] %>%
+        fread(., colClasses = 'character') %>% 
+        .[ID %in% tmp,] %>% 
+        .[,`:=`(id = ID)] %>%  
+        purrr::map_df(as.character) %>% 
+        reshape2::melt(id.vars = c("ID"), 
+                       variable.factor = FALSE, 
+                       warning = FALSE) %>% 
+        data.table() %>% 
+        .[,`:=`(assetattrid = paste0("SED_", str_to_upper(variable)))] %>%  
+        bind_rows(retreived_source_id_info, .)
+    }
+    print("Done")
+  })
+})
+
+retreived_source_id_info$ID = retreived_source_id_info$ID %>%  
+  as.integer()
+
+```
+
+```{r fig.height=4, fig.width=6, fig.align='left'}
+#full merge check and identification of NA records
+merge_check_NA = retreived_source_id_info[!complete.cases(retreived_source_id_info)] #all rows w/ NA
+merge_check_NA_num_total = merge_check_NA %>%  nrow()
+```
+
+```{r}
+#section~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#investigating mismatched occurance
+colum_order_index = c("src", "assetnum", "ID", "assetspecid", 
+                      "assetattrid", "variable", "alnvalue", "value")
+
+attribute_value_master = merge(asset_merged, 
+                               retreived_source_id_info, 
+                               by.x = c("ID", "assetattrid"), 
+                               by.y = c("ID", "assetattrid"), all = TRUE) %>%  
+  unique() %>% 
+  .[,..colum_order_index] %>%
+  .[order(src, ID, assetnum, assetattrid,)] %>% 
+  .[,-1] %>%  
+  merge(., all_source_file_ids, by = "ID" ) %>% 
+  .[,..colum_order_index] %>%  
+  .[order(src, ID, assetnum, assetattrid,)]
+
+index = grepl("JCH", attribute_value_master$assetattrid) 
+attribute_value_master = attribute_value_master[!index]
+
+attribute_value_master_rows = attribute_value_master %>%  nrow()
+
+attribute_value_master %>% 
+  .[duplicated(variable)]
+```
+
+```{r}
+merge_check_NA = attribute_value_master[!complete.cases(attribute_value_master)] #all rows w/ NA
+merge_check_NA_num_total = merge_check_NA %>%  nrow()
+
+na_count = is.na(merge_check_NA) %>%  
+  data.table() %>% 
+  .[,.(.N), by = .(src, ID, assetnum, assetspecid, assetattrid, alnvalue, variable, value)] %>% 
+  .[,-c('src', 'ID', 'assetattrid')] 
+
+```
+
+```{r  }
+ffmerge_na_no_asset_data =  merge_check_NA[is.na(assetnum) &
+                 is.na(assetspecid) &
+                 is.na(alnvalue) &
+                 !is.na(variable) &
+                 !is.na(value),]
+
+
+ffmerge_na_no_extract_data = merge_check_NA[!is.na(assetnum) &
+                 !is.na(assetspecid) &
+                 !is.na(alnvalue) &
+                 is.na(variable) &
+                 is.na(value),]
+
+                 
+ffmerge_na_no_alnvalue_value = merge_check_NA[!is.na(assetnum) &
+                 !is.na(assetspecid) &
+                 is.na(alnvalue) &
+                 !is.na(variable) &
+                 is.na(value),]
+
+
+ffmerge_na_no_value = merge_check_NA[!is.na(assetnum) &
+                 !is.na(assetspecid) &
+                 !is.na(alnvalue) &
+                 !is.na(variable) &
+                 is.na(value),]
+```
+
+```{r}
+attribute_value_master = attribute_value_master %>%  
+  na.omit()
+
+attribute_value_master_good_row = attribute_value_master %>%  nrow()
+```
+
+```{r}
+#matching columns but 
+attribute_value_notmatching =  attribute_value_master %>% 
+  .[alnvalue != value,] %>% 
+  .[,..colum_order_index] %>%  
+  .[order(src, ID, assetnum, assetattrid,)]
+
+attribute_value_matching = attribute_value_master %>% 
+  .[alnvalue == value,] %>% 
+  .[,..colum_order_index] %>%  
+  .[order(src, ID, assetnum, assetattrid,)]
+```
+
+```{r  }
+###Case and Whitespace
+#####################
+######################
+#removes all mismatch cases caused by CASE or whitespace issues
+index_character_mismatch = str_trim(str_to_lower(attribute_value_notmatching$alnvalue), side = "both") == str_trim(str_to_lower(attribute_value_notmatching$value),side = "both")
+tmp = attribute_value_notmatching[!index_character_mismatch]
+
+total_matched_example_case_whitespace_sensitive = attribute_value_notmatching[index_character_mismatch]
+
+### Numeric Padding
+#removes all records where mismatch was caused by false padding encoding
+index_alnvalue = as.numeric(tmp$alnvalue)
+index_alnvalue[is.na(index_alnvalue)] = 0
+
+index_value = as.numeric(tmp$value)
+index_value[is.na(index_value)] = -29348576.127
+
+index_PADDING_mismatch = index_alnvalue == index_value
+
+total_matched_example_padding = tmp[index_PADDING_mismatch]
+tmp = tmp[!index_PADDING_mismatch]
+
+vairable_type = total_matched_example_padding %>% 
+  .[,.(count = .N), by = .(variable)] %>%
+  .[order(-count)]
+  
+
+### Rounding
+
+#removes long/lat columns as proven to be just a rounding error
+index = grepl("LONG", tmp$assetattrid) | grepl("LATITUDE", tmp$assetattrid)
+rounding = tmp[index]
+
+tmp = tmp[!index]
+
+### Special Characters
+
+#removes all records where mismatch was caused by false encoding
+index_DIMENSIONS = tmp$assetattrid == "SED_DIMENSIONS"
+
+total_matched_bad = tmp[!index_DIMENSIONS] 
+
+
+bad_special = nrow(tmp[index_DIMENSIONS])
+
+### Date Format Mismatch 
+
+#identify date records 
+tmp_time_dt = total_matched_bad[str_detect(total_matched_bad$assetattrid, "DATE") ,] 
+
+date_pos_match_excel = tmp_time_dt[value %>%  
+               ymd_hms() %>%  
+               date() == alnvalue %>% 
+               as.numeric() %>% 
+               as.Date(origin = "1899-12-30"),]
+
+date_pos_match_format = tmp_time_dt[str_detect(alnvalue, "/")] %>% 
+  .[value %>%  
+            ymd_hms() %>%  
+            date() == alnvalue %>%  
+            mdy_hm(format = "%Y-%m-%d") %>%  
+            as_date() %>% 
+            na.omit(),]
+
+tmp_time_dt_remaining = tmp_time_dt %>%  
+  anti_join(date_pos_match_excel, by = c("ID", "assetspecid")) %>%  
+  anti_join(date_pos_match_format, by = c("ID", "assetspecid")) %>%  
+  data.table()
+```
+
+```{r  }
+total_matched_bad = total_matched_bad %>%  
+  anti_join(date_pos_match_excel, by = c("ID", "assetspecid")) %>%  
+  anti_join(date_pos_match_format, by = c("ID", "assetspecid")) %>%  
+  data.table()
+
+tmp_good_date = date_pos_match_excel %>%  
+  bind_rows(date_pos_match_format) %>%  
+  data.table()
+
+```
+
+```{r }
+
+total_matched_good = attribute_value_master %>%  
+  anti_join(total_matched_bad, by = c('assetnum', 'assetspecid', "assetattrid")) %>%  
+  data.table()
+
+total_matched_bad %>%  
+  fwrite(file = "./output/data/total_matched_bad.csv")
+
+total_matched_good %>%  
+  fwrite(file = "./output/data/total_matched_good.csv")
+
+fail_percent = 100*nrow(total_matched_bad)/(nrow(total_matched_bad)+ nrow(total_matched_good))
+```
+
+
+```{r results="asis"}
+summary_diagnostic = total_matched_bad %>%  
+  .[,.(fail = .N), by = .(src)] %>%  
+  .[,`:=`(percent_of_failures = 100*round(fail/sum(fail),3))] %>% 
+  merge(total_matched_good %>%  
+          .[,.(pass = .N), by = .(src)], on = "src") %>%  
+  .[,`:=`(total = fail + pass)] %>% 
+  .[,`:=`(Failure_Rate = 100*round(fail/total,3))] %>%  
+  .[order(-fail)] %>%  
+  .[,`:=`(src = str_remove(src, "SED_"))]
+
+pretty_table = summary_diagnostic %>% 
+  .[order(-fail)] %>% 
+  mutate(
+    Failure_Rate = ifelse(Failure_Rate < fail_percent,
+                              cell_spec(Failure_Rate),
+                              cell_spec(Failure_Rate, 
+                                        background = "red", 
+                                        color = "white", 
+                                        align = "center"))
+  ) %>% 
+  set_colnames(c("SED File", "Fail Counts", "% of Failure", "Pass Counts", 
+                 "Total Counts", "Failure_Rate")) %>% 
+  kable(escape = F, caption = "Record Value Mismatch by Source File") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11) %>%
+  scroll_box( height = "200px") 
+```
+
+```{r  , fig.height=4, fig.width=8, fig.align='left'}
+
+diag_plot_1 = summary_diagnostic %>%  
+  .[,`:=`(src = str_remove(src, "SED_"))] %>% 
+  ggplot(aes(area = fail, 
+             fill = Failure_Rate,
+             subgroup = src, 
+             label = src)) + 
+  scale_fill_viridis_c(direction = -1) +
+  geom_treemap(layout = "srow") + 
+  geom_treemap_text(place = "center",size =10, layout = "srow") + 
+  labs(title = "SED File") +
+  theme_classic() +
+  theme(legend.position = "bottom") 
+
+```
+
+```{r}
+summary_diagnostic = total_matched_bad %>%  
+  .[,.(fail = .N), by = .(assetattrid)] %>%  
+  .[,`:=`(percent_of_failures = 100*round(fail/sum(fail),3))] %>%   
+  merge(total_matched_good %>%  
+          .[,.(pass = .N), by = .(assetattrid)], on = "assetattrid") %>%  
+  .[,`:=`(total = fail + pass)] %>% 
+  .[,`:=`(Failure_Rate = 100*round(fail/total,3))] %>%  
+  .[order(-fail)] %>%  
+  .[,`:=`(assetattrid = str_remove(assetattrid, "SED_"))]
+
+pretty_table_2 = summary_diagnostic %>% 
+  .[order(-fail)] %>% 
+  mutate(
+    Failure_Rate = ifelse(Failure_Rate < fail_percent,
+                              cell_spec(Failure_Rate),
+                              cell_spec(Failure_Rate, 
+                                        background = "red", 
+                                        color = "white", 
+                                        align = "center"))
+  ) %>% 
+  set_colnames(c("Asset Attribute Type", "Fail Counts", "% of Failure", "Pass Counts", 
+                 "Total Counts", "Failure_Rate")) %>% 
+  kable(escape = F, caption = "Record Value Mismatch by Asset Attribute") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11) %>%
+  scroll_box( height = "200px") 
+
+diag_plot_2 = summary_diagnostic %>% 
+  ggplot(aes(area = fail, 
+             fill = Failure_Rate,
+             subgroup = assetattrid, 
+             label = assetattrid)) + 
+  scale_fill_viridis_c(direction = -1) +
+  geom_treemap(layout = "srow") + 
+  geom_treemap_text(place = "center",size =10, layout = "srow") + 
+  labs(title = "Asset Attribute") +
+  theme_classic() +
+  theme(legend.position = "bottom") 
+
+
+```
+
+```{r}
+figure_treeplot = ggarrange(diag_plot_1, diag_plot_2) %>% 
+  annotate_figure(., 
+                                  top = text_grob("Visualizing Record Value Mismatch by Source File and Asset Attribute", color = "black", face = "bold", size = 14),
+                  bottom = text_grob("Note: Color Scales are different", color = "black",
+                                   hjust = 1, x = 1, face = "italic", size = 10),)
+```
+
+## Executive Summary
+***
+The WSP DIG team has been working to verify that the Amtrak data transfer was successfully executed. This document stands to report the current state of the data merger verification process. The verification process's goal is to confirm that the **ASSETSPEC** data set (the transferred data) values accurately represent the original data as seen in the SED Excel files. This analysis compared the data in both the original and newly created data using the R language.
+
+In total, **`r nrow(total_matched_bad) + nrow(total_matched_good)`** records were successfully mapped between the two data sets.   
+   
+* **`r nrow(total_matched_good)`** records resulted in **positively** matched values
+* **`r nrow(total_matched_bad)`** records resulted in **falsely** matched values
+* The transfer failure rate is currently **`r round(fail_percent,2)`** percent.
+
+## Successful Value Matches
+***
+200 records were sampled from the raw successfully matched records and can be seen in the table below:
+```{r results='asis'}
+total_matched_good %>%
+  sample_n(200) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11) %>%
+  scroll_box(height = "200px") 
+
+```
+Note: Some *alnvalues* and *values* may appear to not match.
+
+Spot checks on the original negative matches records revealed that a number of Type 1 errors resulted in the initial negative match identification. These Type 1 errors were caused two ways - by R encoding values incorrectly or by the data transfer process. An example of the former would be 0 character padding: R making the integer value **7** and making it **07**. An example of the latter would be case mismatches: the transfer turning a logical **true** value into **TRUE**. A manual process was performed to identify these cases and reclassify them as positive matches.
+   
+In total, **`r  nrow(attribute_value_notmatching)-nrow(total_matched_bad)`** records were reclassified as positive matches. 
+
+## Failed Value Matches
+***
+200 records were sampled from the raw failed matched records and can be seen in the table below:
+```{r results='asis'}
+total_matched_bad %>%
+  sample_n(200) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11) %>%
+  scroll_box(height = "200px") 
+```
+
+### Failure Diagnostics
+***
+Failures in the data transfer process were by and large not random and generally caused by some systematic issue associated with a particular record attribute - eg. the source file a particular record was copied from or problematic *assetattrid*. The below table details the aggregate number of failed value matches per source file and *assetattrid*.
+```{r results='asis'}
+total_matched_bad %>% 
+  .[,.(Count = .N), by = .(src, variable, alnvalue, value)] %>%  
+  .[order(-Count)] %>% 
+  .[,`:=`(Percent = 100*round(Count/sum(Count),3))] %>%
+  mutate(
+    Percent = color_bar("lightgreen")(Percent)
+  ) %>% 
+  set_colnames(c("SED File", "Assetattrid", "Transfer Value", "Original Value", 
+                 "Counts", "Percent")) %>% 
+  kable(escape = F, caption = "Aggregated Failed Match Records") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11) %>% 
+  add_header_above(c("Aggregators" = 2, "Emblematic Failure" = 2, "Metrics" = 2)) %>% 
+  scroll_box( height = "400px") 
+```
+
+    
+       
+This is evidenced by the two tree plots below which show that value mismatches are unevenly distributed across records. The left plot indicates mismatched records counts by originating source file and the right plot by asset attribute. The size of each tile is proportional to the number of failure counts per item. 
+
+```{r results='asis', fig.height=4, fig.width=8, fig.align='left'}
+figure_treeplot
+```
+
+```{r}
+total_matched_source = attribute_value_master %>%  
+  .[,.(.N), by = .(src)] %>%  nrow()
+
+total_matched_assetattrid = attribute_value_master %>%  
+  .[,.(.N), by = .(assetattrid)] %>%  nrow()
+
+total_matched_bad_source = total_matched_bad %>%  
+  .[,.(fail = .N), by = .(src)] %>%  nrow()
+
+total_matched_bad_assetattrid = total_matched_bad %>%  
+  .[,.(fail = .N), by = .(assetattrid)] %>%  nrow()
+
+100*round(total_matched_bad_source/total_matched_source,3)
+100*round(total_matched_bad_assetattrid/total_matched_assetattrid,3)
+```
+
+Failed records were found in **`r 100*round(total_matched_bad_source/total_matched_source,3) `** percent of source files and **`r 100*round(total_matched_bad_assetattrid/total_matched_assetattrid,3)`** percent of *assetattids*.  
+    
+```{r}
+# pretty_table
+```
+
+```{r}
+# pretty_table_2
+```
+
+
+```{r results='asis'}
+tmb_number = total_matched_bad %>% 
+  .[,.(alnvalue, value)] %>%  
+  unique() %>%  
+  nrow()
+
+tmb_data = total_matched_bad %>% 
+  .[,.(Count = .N), by = .(alnvalue, value)] %>% 
+  .[,`:=`(Percent = 100*round(Count/sum(Count),3))] %>% 
+  .[order(-Count)]
+
+# tmb_data
+
+tmb_pulled_percent = tmb_data$Percent[1]
+
+```
+
+Out of the **`r nrow(total_matched_bad)`** total bad match records, there were **`r tmb_number`** unique failure types (specific instances of transfer value not equaling the original). This is an extremely small number and further supports the claim that the failures have systematic root causes and not random. Instead of needing bespoke methods for each record mismatch, we only need to apply a few robust fixes in order to buy down the number of failed records.
+
+### Specific Failures and Fixes
+
+#### Empty Values
+***
+
+```{r}
+yolo1 = nrow(total_matched_bad[value == ""])
+
+```
+
+Empty cells in the excel files are currently being encoded as empty character strings instead of **NULL** character values.  
+      
+* **`r yolo1`** records contain empty character stings
+* This is roughly **`r 100*round(yolo1/nrow(total_matched_bad),3)`** percent of the **`r nrow(total_matched_bad)`** total bad matches
+* Currently flagged as a mismatch but can be considered a good match
+   
+Fixes/comments:   
+      
+* Attributes properly map between data sets
+* Spot checks reveal that attribute exists in source files but with an empty cell
+* Empty cell in ASSETSPEC are reflected as NULL, in theory no-mismatch occuring
+  + Can ignore these 
+  + Or force empty cells to be NULL in source file
+
+Example of error type:
+```{r results = "asis"}
+attribute_value_master[value == ""] %>%   
+  sample_n(5) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11)  
+```
+
+
+#### Date Errors
+***
+
+Of the remaining **`r nrow(total_matched_bad)`** failed match records, there are **`r nrow(tmp_time_dt_remaining)`** records where a *DATE* related attribute caused a mismatched record. 
+  
+Example of error type:
+```{r results = "asis"}
+tmp_time_dt_remaining[, c(1,5,7,8)] %>% 
+  unique() %>% 
+  sample_n(5) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11)
+```
+
+```{r results = "asis"}
+#identify date records 
+tmp_time_dt = total_matched_good[str_detect(total_matched_good$assetattrid, "DATE") ,] 
+```
+
+**`r nrow(tmp_time_dt)`** out of the **`r nrow(total_matched_good)`** positive match records, had dates/time related attributes and values. The Excel files recorded dates in a number of ways which complicated the value comparison analysis.    
+
+Some of these date formats are listed below:   
+   
+* Integer format - days since 1900-01-01
+* Decimal format - days since 1900-01-01 with decimal days
+* Date format - *day/month/Year*
+* General Errors - eg. 0 dates or NULL character strings
+  - Potentially caused by excessive rounding (limiting precision) for a given column
+
+R would encode the dates to a conventional "year-month-date" format where the transfer algorithm would encode their literal values. Even if the dates were the same, the different date formats would flag the record as a bad match. Manual techniques had to be applied In total, **`r nrow(date_pos_match_excel) + nrow(date_pos_match_format)`** date records failed to properly match due to differences in format despite representing the correct date in their own right. 
+
+An example of these records can be seen below:
+
+```{r results='asis'}
+tmp_time_dt %>%
+  .[alnvalue != "NULL" |
+      value != "NULL"] %>% 
+  sample_n(50) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11) %>%
+  scroll_box(height = "200px")
+```
+
+Fixes/comments:
+  
+* Mismatch error caused by the ASSETSPEC alnvalues being formatted as a #### numeric
+* Manual process to change all date fields in source files to same format
+* They need to be reformatted to %Y-%m-%d %H:%M:%S format
+
+#### Special character formatting
+***
+The SED_Dimensions assetattidid used unconventional formatting for dimensions. 
+   
+Fixes/comments:   
+      
+* Uses single and double quotes to indicate feet or inches presumably
+* This is bad practice ideally be parsed into separate length and width components.
+* Reported units are also inconsistent, and should be either all in feet or inches.
+    
+```{r results = "asis"}
+attribute_value_notmatching[assetattrid == "SED_DIMENSIONS"] %>% 
+  sample_n(5) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11) 
+```
+
+## Recap
+```{r}
+excluded = total_matched_bad[!str_detect(total_matched_bad$assetattrid, "DATE") ,] %>% 
+  .[value != "",] %>%  
+  .[value != "N/A",]
+
+total_matched_source = attribute_value_master %>%  
+  .[,.(.N), by = .(src)] %>%  nrow()
+
+total_matched_assetattrid = attribute_value_master %>%  
+  .[,.(.N), by = .(assetattrid)] %>%  nrow()
+
+total_matched_bad_source = excluded %>%  
+  .[,.(fail = .N), by = .(src)] %>%  nrow()
+
+total_matched_bad_assetattrid = excluded %>%  
+  .[,.(fail = .N), by = .(assetattrid)] %>%  nrow()
+```
+
+As it stands there are **`r nrow(total_matched_bad)`**, given some of the highlighted fixes above as well as some others that were not mentioned in this document, that number of bad matches will fall to **`r nrow(excluded)`** records (**`r 100*round(nrow(excluded)/(nrow(total_matched_good)+nrow(total_matched_bad)),4)`** %). The percent of impacted source files would fall to **`r 100*round(total_matched_bad_source/total_matched_source,3) `** percent and impacted *assetattids* would fall to **`r 100*round(total_matched_bad_assetattrid/total_matched_assetattrid,3)`** percent.  
+
+An aggregated table of the expected remaining records can be seen below:
+```{r results='asis'}
+yolo = excluded %>% 
+  .[,.(Count = .N), by = .(src, variable, alnvalue, value)] %>%  
+  .[order(-Count)] %>% 
+  .[,`:=`(Percent = 100*round(Count/sum(Count),3))] %>%
+  mutate(
+    Percent = color_bar("lightgreen")(Percent)
+  ) %>% 
+  set_colnames(c("SED File", "Assetattrid", "Transfer Value", "Original Value", 
+                 "Counts", "Percent")) %>% 
+  kable(escape = F, caption = "Aggregated Failed Match Records") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11) %>% 
+  add_header_above(c("Aggregators" = 2, "Emblematic Failure" = 2, "Metrics" = 2)) %>% 
+  scroll_box( height = "400px") 
+```
+
+# Post Meeting
+***
+
+## Slicing All Records
+***
+
+Outstanding records fixes.
+
+* remove `empty character strings` from value
+* remove `N/A character string` from value
+* Pull out NULL/non-Null records
+  - something went wrong here in transfer
+* Identify remaing rounding issues
+  - Maybe do a floor round
+  - NOTE: did this by doing a straight integer check
+* fix all remaing date records
+  - precision of numbers
+  - r correctly is reformatting the date values
+  - Maximo is not and taking the literal value whatever it is
+  - Split which are wrong and which are bad formatting `00:0.0` and `0`
+  - Also check out records where value is just a date month and year
+
+```{r}
+# input = bad_empty_character
+# bad_empty_character %>% quick_write_out()
+# quick_write_out = function(input){
+#    deparse(substitute(input)) %>%  print()
+#   fwrite(input, file = paste0("./output/data/outstanding/", deparse(substitute(input)), ".csv"))
+# }
+# eval(as.name(paste(bad_empty_character)))
+# eval(parse(bad_empty_character))
+# 
+```
+
+
+```{r}
+excluded %>% 
+  sample_n(100) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = T, font_size = 11)
+```
+
+### Non_Date
+***
+
+```{r}
+#splitting into date and non-date
+total_matched_bad_date = total_matched_bad %>%  
+  .[str_detect(assetattrid, "DATE")]
+
+total_matched_bad_notdate = total_matched_bad %>%  
+  .[!str_detect(assetattrid, "DATE")]
+
+```
+
+
+```{r}
+bad_empty_character = total_matched_bad %>%  
+  .[value == ""] 
+
+bad_empty_character %>% 
+  fwrite(., file = paste0("./output/data/outstanding/", deparse(substitute(bad_empty_character)), ".csv"))
+
+remaining = total_matched_bad %>%  
+  anti_join(bad_empty_character, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table()
+```
+
+```{r}
+bad_NA_character = total_matched_bad %>%  
+  .[value == "N/A"] 
+
+bad_NA_character %>% 
+  fwrite(., file = paste0("./output/data/outstanding/", deparse(substitute(bad_NA_character)), ".csv"))
+
+remaining = remaining %>%  
+  anti_join(bad_NA_character, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table()
+```
+
+```{r}
+bad_null_value = total_matched_bad[alnvalue == "NULL"] %>% 
+  .[value != "NULL"] %>% 
+  .[value != ""] %>% 
+  .[value != "N/A"]
+
+bad_null_value %>% 
+  fwrite(., file = paste0("./output/data/outstanding/", deparse(substitute(bad_null_value)), ".csv"))
+
+remaining = remaining %>%   
+  anti_join(bad_null_value, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table()
+```
+  
+```{r}
+bad_null_alnvalue = total_matched_bad[alnvalue != "NULL" &  value == "NULL"] 
+
+bad_null_alnvalue %>% 
+  fwrite(., file = paste0("./output/data/outstanding/", deparse(substitute(bad_null_alnvalue)), ".csv"))
+
+remaining = remaining %>%  
+  anti_join(bad_null_alnvalue, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table()
+```
+
+```{r}
+bad_integer_round = total_matched_bad[as.integer(alnvalue) == as.integer(value)]
+
+bad_integer_round %>% 
+  fwrite(., file = paste0("./output/data/outstanding/", deparse(substitute(bad_integer_round)), ".csv"))
+
+remaining = remaining %>%  
+  anti_join(bad_integer_round, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table()
+```
+
+
+```{r}
+bad_scientific_notation_2d = remaining %>% 
+  data.table() %>% 
+  .[alnvalue == value %>%
+      as.numeric() %>% 
+      formatC(format = "E", digits=2) %>%  
+      as.character(),]
+
+bad_scientific_notation_2d %>% 
+  fwrite(., file = paste0("./output/data/outstanding/", deparse(substitute(bad_scientific_notation_2d)), ".csv"))
+  
+remaining = remaining %>%   
+  anti_join(bad_scientific_notation_2d, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table()
+```
+
+```{r}
+bad_scientific_notation_1d = remaining %>% 
+  data.table() %>% 
+  .[alnvalue == value %>%
+      as.numeric() %>% 
+      formatC(format = "E", digits=1) %>%  
+      as.character(),]
+
+bad_scientific_notation_1d %>% 
+  fwrite(., file = paste0("./output/data/outstanding/", deparse(substitute(bad_scientific_notation_1d)), ".csv"))
+  
+remaining = remaining %>%   
+  anti_join(bad_scientific_notation_1d, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table()
+```
+
+
+
+```{r}
+bad_custom_format = remaining %>% 
+  .[str_detect(alnvalue, ":") & 
+      str_detect(alnvalue, ".") ]
+
+bad_custom_format %>% 
+  fwrite(., file = paste0("./output/data/outstanding/", deparse(substitute(bad_custom_format)), ".csv"))
+  
+remaining = remaining %>%   
+  anti_join(bad_custom_format, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table()
+```
+
+```{r}
+bad_hastags = remaining %>% 
+  .[str_detect(alnvalue,"#"),]
+
+bad_hastags %>% 
+  fwrite(., file = paste0("./output/data/outstanding/", deparse(substitute(bad_hastags)), ".csv"))
+  
+remaining = remaining %>%   
+  anti_join(bad_hastags, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table()
+```
+
+```{r}
+bad_integers = remaining %>%  
+  .[!is.na(as.integer(alnvalue)),] %>% 
+  .[!is.na(as.integer(value)),]
+
+bad_integers %>% 
+  fwrite(., file = paste0("./output/data/outstanding/", deparse(substitute(bad_integers)), ".csv"))
+
+remaining = remaining %>%   
+  anti_join(bad_integers, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table()
+```
+
+```{r}
+bad_backslash = remaining %>% 
+  .[str_detect(value,"/"),]
+
+bad_backslash %>% 
+  fwrite(., file = paste0("./output/data/outstanding/", deparse(substitute(bad_backslash)), ".csv"))
+  
+remaining = remaining %>%   
+  anti_join(bad_backslash, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table()
+```
+
+```{r}
+bad_numeric_dash = remaining %>%  
+  .[str_count(value, "-") == 2]  
+
+bad_numeric_dash %>% 
+  fwrite(., file = paste0("./output/data/outstanding/", deparse(substitute(bad_numeric_dash)), ".csv"))
+
+remaining = remaining %>%   
+  anti_join(bad_numeric_dash, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table()
+
+```
+
+```{r}
+bad_date_straglers = remaining %>%  
+  .[str_detect(assetattrid, "DATE")]
+
+bad_date_straglers %>% 
+  fwrite(., file = paste0("./output/data/outstanding/", deparse(substitute(bad_date_straglers)), ".csv"))
+
+remaining = remaining %>%   
+  anti_join(bad_date_straglers, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table()
+```
+
+### Date
+***
+
+```{r}
+remaining_bad_dates = tmp_time_dt_remaining
+remaining_bad_dates$value = remaining_bad_dates$value %>%  
+  str_trim()
+```
+
+
+#### Date Correction: Negative Matches
+***
+
+```{r}
+bad_date_empty_value = remaining_bad_dates %>%  
+  .[value == "",] 
+
+bad_date_NULL %>% 
+  fwrite(., file = paste0("./output/data/outstanding/", deparse(substitute(bad_date_NULL)), ".csv"))
+
+remaining_bad_dates = remaining_bad_dates %>%   
+  anti_join(bad_date_empty_value, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table()
+
+#FIX:
+bad_date_empty_value$value = "NULL"
+bad_date_empty_value$nu_date = "NULL"
+
+#summary
+# bad_date_empty_value %>% summerizer()
+
+```
+
+```{r}
+bad_date_NULL_value = remaining_bad_dates %>%  
+  .[value == "NULL",] 
+
+bad_date_NULL %>% 
+  fwrite(., file = paste0("./output/data/outstanding/", deparse(substitute(bad_date_NULL)), ".csv"))
+
+remaining_bad_dates = remaining_bad_dates %>%   
+  anti_join(bad_date_NULL, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table()
+
+#FIX:
+
+```
+
+```{r}
+bad_date_NULL_alnvalue = remaining_bad_dates %>%  
+  .[alnvalue == "NULL",] 
+
+bad_date_NULL_alnvalue %>% 
+  fwrite(., file = paste0("./output/data/outstanding/", deparse(substitute(bad_date_NULL_alnvalue)), ".csv"))
+
+remaining_bad_dates = remaining_bad_dates %>%   
+  anti_join(bad_date_NULL_alnvalue, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table()
+
+#FIX:
+bad_date_NULL_alnvalue = bad_date_NULL_alnvalue %>% 
+  .[str_count(value)<8,`:=`(value = paste0(value, "-00-00 00:00:00"))] %>% 
+  .[,`:=`(nu_date = str_trunc(value, 19, "right", ellipsis = ""))]
+
+#summary
+# bad_date_NULL_alnvalue %>% summerizer()
+
+```
+
+
+```{r}
+bad_date_zero = remaining_bad_dates %>%  
+  .[alnvalue == "0",] 
+
+bad_date_zero %>% 
+  fwrite(., file = paste0("./output/data/outstanding/", deparse(substitute(bad_date_zero)), ".csv"))
+
+remaining_bad_dates = remaining_bad_dates %>%   
+  anti_join(bad_date_zero, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table()
+
+#FIX:
+bad_date_zero = bad_date_zero %>%  
+  .[,`:=`(nu_date = str_trunc(value, 19, "right", ellipsis = ""))]
+
+# bad_date_zero %>% summerizer()
+
+```
+
+```{r}
+bad_date_custom_format_w_integer = remaining_bad_dates %>% 
+  .[str_detect(alnvalue, ":") & 
+      str_detect(alnvalue, ".")] %>%  
+  .[str_count(value) < 9]
+
+bad_date_custom_format_w_integer %>% 
+  fwrite(., file = paste0("./output/data/outstanding/", deparse(substitute(bad_date_custom_format_w_integer)), ".csv"))
+  
+remaining_bad_dates = remaining_bad_dates %>%   
+  anti_join(bad_date_custom_format_w_integer, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table()
+
+#FIX:
+bad_date_custom_format_w_integer = bad_date_custom_format_w_integer[,`:=`(nu_date = as.numeric(value) %>% 
+                             as_date(origin = "1899-12-30") %>% 
+            paste0(" 00:00:00")), ]
+
+bad_date_custom_format_w_integer %>%  tail(200)
+```
+
+```{r}
+bad_date_custom_format_w_date = remaining_bad_dates %>% 
+  .[str_detect(alnvalue, ":") & 
+      str_detect(alnvalue, ".")] %>%  
+  .[str_count(value) >= 9]
+
+bad_date_custom_format_w_date %>% 
+  fwrite(., file = paste0("./output/data/outstanding/", deparse(substitute(bad_date_custom_format_w_date)), ".csv"))
+  
+remaining_bad_dates = remaining_bad_dates %>%   
+  anti_join(bad_date_custom_format_w_date, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table()
+
+#FIX:
+bad_date_custom_format_w_date = bad_date_custom_format_w_date$nu_date = bad_date_custom_format_w_date$value %>%  
+  str_trunc(19, "right", ellipsis = "")
+```
+
+
+```{r}
+bad_date_decimallong = remaining_bad_dates %>%  
+  .[!is.na(as.integer(alnvalue)),] %>% 
+  .[str_count(alnvalue)>=8]
+
+bad_date_decimallong %>% 
+  fwrite(., file = paste0("./output/data/outstanding/", deparse(substitute(bad_date_decimallong)), ".csv"))
+
+remaining_bad_dates = remaining_bad_dates %>%   
+  anti_join(bad_date_decimallong, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table()
+
+bad_date_decimallong[,`:=`(tmp_date = as.numeric(alnvalue) %>%
+                             as_date(origin = "1899-12-30"),
+                           tmp_hms = round((as.numeric(alnvalue)%%1)*(24*60*60),2) %>%
+                             seconds()),] 
+
+tmp_full_date = bad_date_decimallong$tmp_date + bad_date_decimallong$tmp_hms
+
+bad_date_decimallong$nu_date = as.character(tmp_full_date) %>%  
+  paste("00:00:00") %>%  
+  str_trunc(19, "right", ellipsis = "")
+
+
+bad_date_decimallong$value = bad_date_decimallong$value %>% 
+  as_datetime() %>%  
+  round_date(unit = "second") %>% 
+  as.character()
+
+bad_date_decimallong %>% summerizer()
+```
+
+```{r}
+bad_date_decimallong = remaining_bad_dates %>%  
+  .[!is.na(as.integer(alnvalue)),] %>% 
+  .[str_count(alnvalue)>=8]
+
+bad_date_decimallong %>% 
+  fwrite(., file = paste0("./output/data/outstanding/", deparse(substitute(bad_date_decimallong)), ".csv"))
+
+remaining_bad_dates = remaining_bad_dates %>%   
+  anti_join(bad_date_decimallong, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table() 
+
+
+yolo = remaining_bad_dates %>% 
+  .[,`:=`(value = str_trunc(paste(value, "00:00:00"),19, "right", ellipsis = "" ))] %>% 
+  .[,`:=`(nu_date = as.numeric(alnvalue) %>% 
+           as_date(origin = "1899-12-30") %>% 
+           paste0(" 00:00:00")), ] %>% 
+  .[alnvalue == 1 & value == "1900-01-01 00:00:00", `:=`(nu_date = "1900-01-01 00:00:00")]
+
+```
+
+#### Date Correction: Positive Matches
+***
+
+```{r}
+remaining_good_dates = total_matched_good[str_detect(assetattrid, "DATE")]
+
+```
+
+```{r}
+good_date_NULL = remaining_good_dates[value == "NULL"] 
+
+remaining_good_dates = remaining_good_dates %>%   
+  anti_join(good_date_NULL, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table()
+
+#FIX:
+good_date_NULL$nu_date = good_date_NULL$value
+```
+
+```{r}
+good_date_multi_year = remaining_good_dates %>%  
+  .[str_detect(alnvalue, ";")]
+
+remaining_good_dates = remaining_good_dates %>%   
+  anti_join(good_date_multi_year, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table() 
+
+#FIX
+good_date_multi_year$nu_date = good_date_multi_year$value
+```
+
+```{r}
+good_date_X = remaining_good_dates %>%  
+  .[str_trim(value) == "X"]
+
+remaining_good_dates = remaining_good_dates %>%   
+  anti_join(good_date_X, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table() 
+
+#FIX
+good_date_X$nu_date = good_date_X$value
+
+```
+
+```{r}
+good_date_SUP = remaining_good_dates[assetattrid == "SED_SUBDATE"]
+
+remaining_good_dates = remaining_good_dates %>%   
+  anti_join(good_date_SUP, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table()
+
+#FIX:
+good_date_SUP = good_date_SUP %>% 
+  .[,`:=`(nu_date = paste0(value, "-00-00 00:00:00"))] 
+```
+
+
+```{r}
+good_date_integers = remaining_good_dates[as.integer(alnvalue) == as.integer(value)] 
+
+remaining_good_dates = remaining_good_dates %>%   
+  anti_join(good_date_integers, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table()
+
+#FIX
+good_date_integers = good_date_integers[,`:=`(nu_date = as.numeric(value) %>% 
+                             as_date(origin = "1899-12-30") %>% 
+            paste0(" 00:00:00")), ]
+
+```
+
+```{r}
+good_date_frogpoint = remaining_good_dates[str_detect(assetattrid, "FROG") | 
+                       str_detect(assetattrid, "POINT"),] 
+
+remaining_good_dates = remaining_good_dates %>%   
+  anti_join(good_date_frogpoint, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table()
+
+good_date_frogpoint = good_date_frogpoint %>%  
+  .[,`:=`(nu_date = strptime(value, format = "%b %d %Y %H:%M") %>% 
+            as.character())]
+
+```
+
+```{r}
+good_date_formatlong = remaining_good_dates %>%  
+  .[str_count(value)>=15]
+
+remaining_good_dates = remaining_good_dates %>%   
+  anti_join(good_date_formatlong, by = c('assetnum', 'ID', 'assetspecid')) %>%  
+  data.table() 
+
+#FIX
+good_date_formatlong = good_date_formatlong %>% 
+  .[,`:=`(nu_date = str_trunc(value,19, "right", ellipsis = "" ))] 
+
+```
+
+
+
+### Date Aggregation
+
+```{r}
+all_bad = bind_rows(bad_date_zero,
+          bad_date_empty_value,
+          bad_date_NULL_alnvalue,
+          bad_date_custom_format_w_integer,
+          bad_date_custom_format_w_date,
+          bad_date_decimallong, 
+          date_pos_match_excel,
+          date_pos_match_format) %>% 
+  .[,-c("tmp_date", "tmp_hms")] %>%
+  .[,`:=`(match_type = "bad")]
+
+```
+
+```{r}
+all_good = bind_rows(good_date_NULL,
+                     good_date_SUP,
+                     good_date_integers,
+                     good_date_frogpoint,
+                     good_date_formatlong,
+                     good_date_X,
+                     good_date_multi_year) %>%
+  .[,`:=`(match_type = "good")]
+```
+
+```{r}
+total_date = bind_rows(all_good, all_bad)
+```
+
+```{r}
+total_date[,.(assetnum, assetattrid, nu_date)] %>%  
+  fwrite(., file = paste0("./output/data/corrected_records/", "corrected_dates", ".csv"))
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

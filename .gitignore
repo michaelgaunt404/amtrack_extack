@@ -1,0 +1,23 @@
+#dotfiles~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+.RDataTmp
+
+#files~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#example: /name.extrension -> single file
+#example: *.extension -> all files with this extension
+*.html
+
+#folders~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#example: name/ -> gets rid of folders with this name
+#example: name/** -> gets rid of all files in folder
+cache/
+data/
+output/
+amtrak_extract_MD_cache/
+amtrak_short_report_cache/
+amtrak_short_report_files/
+summary_knit_test_cache/
+summary_knit_test_files/
